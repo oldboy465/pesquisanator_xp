@@ -10,7 +10,6 @@ from processamento import limpar_nome_arquivo_windows
 
 try:
     import openpyxl
-    from openpyxl.chart import BarChart, PieChart, Reference
     from openpyxl.formatting.rule import CellIsRule
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -69,6 +68,33 @@ def _to_float(val: Any, default: float = 0.0) -> float:
     return default
 
 
+def _h_index_texto(registro: dict[str, Any]) -> str:
+    exib = str(registro.get("h_index_exibicao") or "").strip()
+    if exib and exib != "N/D":
+        return exib
+    raw = registro.get("h_index_revista")
+    if raw in ("", None):
+        raw = registro.get("h_index")
+    return str(raw) if raw not in ("", None) else "N/D"
+
+
+def _h_index_celula(registro: dict[str, Any]) -> int | str:
+    exib = str(registro.get("h_index_exibicao") or "").strip()
+    if "aproximado" in exib.lower():
+        return exib
+    raw = registro.get("h_index_revista")
+    if raw in ("", None):
+        raw = registro.get("h_index")
+    if raw in ("", None):
+        return ""
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return int(raw)
+    try:
+        return int(float(str(raw).strip()))
+    except ValueError:
+        return str(raw)
+
+
 def _escapar_bibtex(texto: Any) -> str:
     s = str(texto or "")
     s = s.replace("\\", "\\textbackslash{}")
@@ -90,10 +116,12 @@ def exportar_csv(registros: list[dict[str, Any]], pasta_saida: str, on_log: Call
         "autores",
         "periodico",
         "h_index_revista",
+        "h_index_exibicao",
         "quartil_revista",
         "citescore_revista",
         "sjr_revista",
         "fonte_metrica_revista",
+        "notificacao_metrica",
         "editora",
         "ano",
         "idioma",
@@ -220,16 +248,18 @@ def gerar_relatorio_txt(
         "-" * 82,
     ])
     for i, r in enumerate(aprovados, start=1):
-        h_raw = r.get("h_index_revista")
-        h_str = str(h_raw) if h_raw not in ("", None) else "N/D"
+        h_str = _h_index_texto(r)
         q_val = str(r.get("quartil_revista") or "N/D")
         cs_raw = r.get("citescore_revista")
         cs_str = str(cs_raw) if cs_raw not in ("", None) else "N/D"
         sjr_val = str(r.get("sjr_revista") or "N/D")
+        notif = str(r.get("notificacao_metrica") or "").strip()
         linhas.append(f"[{i:03d}] {r.get('titulo', '')}")
         linhas.append(f"      Autores     : {r.get('autores') or 'Nao_Informado'}")
         linhas.append(f"      Revista     : {r.get('periodico') or 'Nao_Informado'} | Ano: {r.get('ano') or 'N/A'} | Idioma: {r.get('idioma') or 'N/A'}")
         linhas.append(f"      Metricas    : H-Index={h_str} | Quartil={q_val} | CiteScore={cs_str} | SJR={sjr_val}")
+        if notif:
+            linhas.append(f"      Aviso       : {notif}")
         linhas.append(f"      Plataformas : {r.get('plataformas_consolidadas') or r.get('plataforma', '')}")
         linhas.append(f"      DOI         : {r.get('doi') or 'N/A'} | ID Externo: {r.get('identificador_externo') or 'N/A'}")
         linhas.append(f"      Download    : {r.get('status_download') or 'NAO_AVALIADO'} | Arquivo: {r.get('arquivo_pdf') or '-'}")
@@ -244,8 +274,7 @@ def gerar_relatorio_txt(
         key=lambda x: (-_to_int(x.get("h_index"), -1), str(x.get("periodico") or "")),
     )
     for idx_r, rv in enumerate(rev_ordenadas, start=1):
-        h_raw = rv.get("h_index")
-        h_str = str(h_raw) if h_raw not in ("", None) else "N/D"
+        h_str = _h_index_texto(rv)
         cs_raw = rv.get("citescore")
         cs_str = str(cs_raw) if cs_raw not in ("", None) else "N/D"
         linhas.append(
@@ -260,8 +289,7 @@ def gerar_relatorio_txt(
             "-" * 82,
         ])
         for i, ex in enumerate(excluidos, start=1):
-            h_ex_raw = ex.get("h_index_revista")
-            h_ex_str = str(h_ex_raw) if h_ex_raw not in ("", None) else "N/D"
+            h_ex_str = _h_index_texto(ex)
             linhas.append(
                 f"  ({i:03d}) [{ex.get('plataforma')}] {ex.get('titulo')} | Revista: {ex.get('periodico') or 'Nao_Informado'} "
                 f"| H-Index: {h_ex_str} | DOI: {ex.get('doi') or 'N/A'} "
@@ -341,7 +369,7 @@ def _escrever_workbook_xlsx(
     cols_todos = [
         "ID interno", "Plataforma", "Plataformas consolidadas", "String de busca", "Strings consolidadas",
         "Título", "Autores", "Periódico", "H-Index revista", "Quartil revista", "CiteScore revista",
-        "SJR revista", "Fonte métrica", "Editora", "Ano", "Idioma", "Tipo de publicação",
+        "SJR revista", "Fonte métrica", "Notificação métrica", "Editora", "Ano", "Idioma", "Tipo de publicação",
         "DOI", "Identificador externo", "ISSN", "Acesso aberto", "URL original", "URL do PDF",
         "Data publicação", "Data recuperação", "Resumo", "Situação na triagem",
         "Motivo da exclusão ou aprovação", "Termo responsável", "Situação da deduplicação",
@@ -360,11 +388,12 @@ def _escrever_workbook_xlsx(
             str(r.get("titulo") or ""),
             str(r.get("autores") or ""),
             str(r.get("periodico") or ""),
-            r.get("h_index_revista") if r.get("h_index_revista") not in ("", None) else "",
+            _h_index_celula(r),
             str(r.get("quartil_revista") or "N/D"),
             r.get("citescore_revista") if r.get("citescore_revista") not in ("", None) else "",
             str(r.get("sjr_revista") or "N/D"),
             str(r.get("fonte_metrica_revista") or ""),
+            str(r.get("notificacao_metrica") or ""),
             str(r.get("editora") or ""),
             str(r.get("ano") or ""),
             str(r.get("idioma") or "") or "IDIOMA_NAO_INFORMADO",
@@ -399,7 +428,7 @@ def _escrever_workbook_xlsx(
     cols_aprov = [
         "ID interno", "Título", "Autores", "Ano", "Idioma", "Tipo", "Periódico",
         "H-Index revista", "Quartil revista", "CiteScore revista", "SJR revista",
-        "Editora", "DOI", "Identificador externo", "ISSN", "Acesso aberto",
+        "Notificação métrica", "Editora", "DOI", "Identificador externo", "ISSN", "Acesso aberto",
         "Plataformas de origem", "Strings de origem", "URL original", "URL do PDF",
         "Status do download", "Arquivo PDF", "Hash SHA-256", "Resumo",
     ]
@@ -413,10 +442,11 @@ def _escrever_workbook_xlsx(
             str(r.get("idioma") or "") or "IDIOMA_NAO_INFORMADO",
             str(r.get("tipo") or ""),
             str(r.get("periodico") or ""),
-            r.get("h_index_revista") if r.get("h_index_revista") not in ("", None) else "",
+            _h_index_celula(r),
             str(r.get("quartil_revista") or "N/D"),
             r.get("citescore_revista") if r.get("citescore_revista") not in ("", None) else "",
             str(r.get("sjr_revista") or "N/D"),
+            str(r.get("notificacao_metrica") or ""),
             str(r.get("editora") or ""),
             str(r.get("doi") or ""),
             str(r.get("identificador_externo") or ""),
@@ -435,14 +465,17 @@ def _escrever_workbook_xlsx(
     _ajustar_larguras(ws_aprov)
 
     # ABA 4 — ARTIGOS_EXCLUIDOS
-    cols_excl = ["ID interno", "Título", "Periódico", "H-Index revista", "Plataforma", "String de origem", "DOI", "Motivo da exclusão", "Termo responsável pela exclusão"]
+    cols_excl = [
+        "ID interno", "Título", "Periódico", "H-Index revista", "Plataforma",
+        "String de origem", "DOI", "Motivo da exclusão", "Termo responsável pela exclusão",
+    ]
     ws_excl.append(cols_excl)
     for ex in excluidos:
         ws_excl.append([
             str(ex.get("id_interno") or ""),
             str(ex.get("titulo") or ""),
             str(ex.get("periodico") or ""),
-            ex.get("h_index_revista") if ex.get("h_index_revista") not in ("", None) else "",
+            _h_index_celula(ex),
             str(ex.get("plataforma_inicial") or ex.get("plataforma") or ""),
             str(ex.get("string_busca_inicial") or ex.get("string_busca") or ""),
             str(ex.get("doi") or ""),
@@ -458,8 +491,8 @@ def _escrever_workbook_xlsx(
         "DOI", "URL do PDF", "Tentativa", "Data e hora", "Status do download", "Arquivo PDF",
         "Tamanho (bytes)", "Hash SHA-256", "Descrição / erro",
     ]
-    mapa_info_id = {
-        str(r.get("id_interno") or ""): (str(r.get("periodico") or ""), r.get("h_index_revista", ""))
+    mapa_info_id: dict[str, tuple[str, int | str]] = {
+        str(r.get("id_interno") or ""): (str(r.get("periodico") or ""), _h_index_celula(r))
         for r in todos_registros
     }
     ws_down.append(cols_down)
@@ -471,7 +504,7 @@ def _escrever_workbook_xlsx(
             str(h.get("string_busca") or ""),
             str(h.get("titulo") or ""),
             per_h,
-            h_h if h_h not in ("", None) else "",
+            h_h,
             str(h.get("doi") or ""),
             str(h.get("url_pdf") or ""),
             _to_int(h.get("tentativa"), 0),
@@ -598,7 +631,7 @@ def _escrever_workbook_xlsx(
     # ABA 10 — POR_REVISTAS
     cols_rev = [
         "Periódico", "ISSN", "H-Index", "Quartil", "CiteScore",
-        "SJR", "Quantidade de artigos", "Fonte da métrica",
+        "SJR", "Quantidade de artigos", "Fonte da métrica", "Notificação",
     ]
     ws_rev.append(cols_rev)
     rev_dict = resumo_revistas or {}
@@ -606,17 +639,17 @@ def _escrever_workbook_xlsx(
         rev_dict.values(),
         key=lambda x: (-_to_int(x.get("h_index"), -1), str(x.get("periodico") or "")),
     ):
-        h_v = rv.get("h_index")
         cs_v = rv.get("citescore")
         ws_rev.append([
             str(rv.get("periodico") or ""),
             str(rv.get("issn") or ""),
-            h_v if h_v not in ("", None) else "",
+            _h_index_celula(rv),
             str(rv.get("quartil") or "N/D"),
             cs_v if cs_v not in ("", None) else "",
             str(rv.get("sjr") or "N/D"),
             _to_int(rv.get("qtd_artigos"), 0),
             str(rv.get("fonte_metrica") or ""),
+            str(rv.get("notificacao") or ""),
         ])
     _estilizar_cabecalho(ws_rev, len(cols_rev), "2B4C7E")
     _ajustar_larguras(ws_rev)
@@ -642,8 +675,9 @@ def _escrever_workbook_xlsx(
     _estilizar_cabecalho(ws_err, len(cols_err))
     _ajustar_larguras(ws_err)
 
+    # Formatação condicional para Status do download em TODOS_OS_REGISTROS (coluna AH = 34)
     if len(todos_registros) > 0:
-        faixa_status = f"AG2:AG{len(todos_registros) + 1}"
+        faixa_status = f"AH2:AH{len(todos_registros) + 1}"
         ws_todos.conditional_formatting.add(
             faixa_status,
             CellIsRule(operator="equal", formula=['"BAIXADO_COM_SUCESSO"'], fill=PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")),
@@ -657,10 +691,11 @@ def _escrever_workbook_xlsx(
             CellIsRule(operator="equal", formula=['"HTTP_403"'], fill=PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")),
         )
 
+    # ABA 1 — DASHBOARD (sem gráficos, mantendo todos os KPIs e fórmulas)
     ws_dash["A1"] = "PESQUISANATOR XP — DASHBOARD EXECUTIVO DE COLETA BIBLIOGRÁFICA"
     ws_dash["A1"].font = Font(name="Tahoma", size=13, bold=True, color="FFFFFF")
     ws_dash["A1"].fill = PatternFill(start_color="0054E3", end_color="0054E3", fill_type="solid")
-    ws_dash.merge_cells("A1:E1")
+    ws_dash.merge_cells("A1:D1")
     ws_dash.row_dimensions[1].height = 28
 
     ws_dash["A3"] = "Indicador"
@@ -673,18 +708,18 @@ def _escrever_workbook_xlsx(
     max_row_todos = max(2, len(todos_registros) + 1)
     kpis: list[tuple[str, int | str]] = [
         ("Total de registros brutos recuperados", f"=COUNTA(TODOS_OS_REGISTROS!A2:A{max_row_todos})" if todos_registros else 0),
-        ("Total de artigos únicos", f'=COUNTIF(TODOS_OS_REGISTROS!AD2:AD{max_row_todos},"UNICO")' if todos_registros else 0),
-        ("Total de duplicados", f'=COUNTIF(TODOS_OS_REGISTROS!AD2:AD{max_row_todos},"DUPLICADO")' if todos_registros else 0),
-        ("Total de artigos aprovados", f'=COUNTIF(TODOS_OS_REGISTROS!AA2:AA{max_row_todos},"APROVADO")' if todos_registros else 0),
-        ("Total de artigos excluídos", f'=COUNTIF(TODOS_OS_REGISTROS!AA2:AA{max_row_todos},"EXCLUIDO")' if todos_registros else 0),
-        ("Total de artigos ignorados", f'=COUNTIF(TODOS_OS_REGISTROS!AA2:AA{max_row_todos},"IGNORADO_DUPLICADO")' if todos_registros else 0),
+        ("Total de artigos únicos", f'=COUNTIF(TODOS_OS_REGISTROS!AE2:AE{max_row_todos},"UNICO")' if todos_registros else 0),
+        ("Total de duplicados", f'=COUNTIF(TODOS_OS_REGISTROS!AE2:AE{max_row_todos},"DUPLICADO")' if todos_registros else 0),
+        ("Total de artigos aprovados", f'=COUNTIF(TODOS_OS_REGISTROS!AB2:AB{max_row_todos},"APROVADO")' if todos_registros else 0),
+        ("Total de artigos excluídos", f'=COUNTIF(TODOS_OS_REGISTROS!AB2:AB{max_row_todos},"EXCLUIDO")' if todos_registros else 0),
+        ("Total de artigos ignorados", f'=COUNTIF(TODOS_OS_REGISTROS!AB2:AB{max_row_todos},"IGNORADO_DUPLICADO")' if todos_registros else 0),
         ("Total de PDFs disponíveis", _to_int(stats.get("pdfs_disponiveis"), 0)),
         ("Total de PDFs baixados", _to_int(stats.get("pdfs_baixados"), 0)),
         ("Total de PDFs já existentes", _to_int(stats.get("pdfs_ja_existiam"), 0)),
         ("Total de PDFs bloqueados", sum(1 for r in todos_registros if r.get("status_download") in {"ACESSO_RESTRITO", "HTTP_403"})),
         ("Total de PDFs sem link", sum(1 for r in todos_registros if r.get("status_download") == "SEM_LINK_PDF")),
         ("Total de falhas", _to_int(stats.get("pdfs_falha"), 0)),
-        ("Taxa de sucesso dos downloads", "=IF((H11+H12+H15)>0, (H11+H12)/(H11+H12+H15), 0)"),
+        ("Taxa de sucesso dos downloads", "=IF((B11+B12+B15)>0, (B11+B12)/(B11+B12+B15), 0)"),
         ("Quantidade de plataformas consultadas", _to_int(stats.get("plataformas_consultadas"), 0)),
         ("Quantidade de strings executadas", _to_int(stats.get("strings_executadas"), 0)),
         ("Quantidade de periódicos avaliados", len(rev_dict)),
@@ -699,57 +734,7 @@ def _escrever_workbook_xlsx(
         else:
             c_val.number_format = "#,##0"
 
-    if len(plataformas_lista) > 0:
-        chart_plat = BarChart()
-        chart_plat.title = "Artigos por Plataforma"
-        chart_plat.y_axis.title = "Registros"
-        chart_plat.x_axis.title = "Plataforma"
-        data_ref = Reference(ws_plat, min_col=2, min_row=1, max_row=len(plataformas_lista) + 1)
-        cats_ref = Reference(ws_plat, min_col=1, min_row=2, max_row=len(plataformas_lista) + 1)
-        chart_plat.add_data(data_ref, titles_from_data=True)
-        chart_plat.set_categories(cats_ref)
-        chart_plat.width = 15
-        chart_plat.height = 9
-        ws_dash.add_chart(chart_plat, "D4")
-
-    if len(stats_por_consulta) > 0:
-        chart_str = BarChart()
-        chart_str.title = "Artigos Brutos por String"
-        chart_str.y_axis.title = "Brutos"
-        chart_str.x_axis.title = "String"
-        data_str = Reference(ws_str, min_col=3, min_row=1, max_row=len(stats_por_consulta) + 1)
-        cats_str = Reference(ws_str, min_col=1, min_row=2, max_row=len(stats_por_consulta) + 1)
-        chart_str.add_data(data_str, titles_from_data=True)
-        chart_str.set_categories(cats_str)
-        chart_str.width = 15
-        chart_str.height = 9
-        ws_dash.add_chart(chart_str, "D22")
-
-    if len(mapa_idiomas) > 0:
-        chart_lang = PieChart()
-        chart_lang.title = "Distribuição por Idioma"
-        data_lang = Reference(ws_lang, min_col=3, min_row=1, max_row=len(mapa_idiomas) + 1)
-        cats_lang = Reference(ws_lang, min_col=1, min_row=2, max_row=len(mapa_idiomas) + 1)
-        chart_lang.add_data(data_lang, titles_from_data=True)
-        chart_lang.set_categories(cats_lang)
-        chart_lang.width = 14
-        chart_lang.height = 9
-        ws_dash.add_chart(chart_lang, "A22")
-
-    if len(mapa_anos) > 0:
-        chart_ano = BarChart()
-        chart_ano.title = "Distribuição por Ano"
-        chart_ano.y_axis.title = "Registros"
-        chart_ano.x_axis.title = "Ano"
-        data_ano = Reference(ws_ano, min_col=2, min_row=1, max_row=len(mapa_anos) + 1)
-        cats_ano = Reference(ws_ano, min_col=1, min_row=2, max_row=len(mapa_anos) + 1)
-        chart_ano.add_data(data_ano, titles_from_data=True)
-        chart_ano.set_categories(cats_ano)
-        chart_ano.width = 15
-        chart_ano.height = 9
-        ws_dash.add_chart(chart_ano, "A40")
-
-    _ajustar_larguras(ws_dash, max_largura=44)
+    _ajustar_larguras(ws_dash, max_largura=48)
     wb.save(xlsx_path)
 
 

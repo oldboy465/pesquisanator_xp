@@ -248,6 +248,8 @@ def _montar_registro_padrao(
         "data_publicacao": (data_publicacao or "").strip(),
         "data_recuperacao": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "h_index_revista": "",
+        "h_index_exibicao": "N/D",
+        "notificacao_metrica": "",
         "sjr_revista": "N/D",
         "citescore_revista": "",
         "quartil_revista": "N/D",
